@@ -1,110 +1,134 @@
+import React from "react";
 import { useState, useEffect } from "react";
-import { Search, Loader2, MessageSquare, History, Send, User, ShieldAlert, ArrowLeft } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { ArrowLeft, Search } from "lucide-react";
 import Navbar from "../components/Navbar.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
+import { getSession, getToken, clearSession } from "../utils/storage.js";
 import API_URL from "../utils/api.js";
-import { getToken, getSession } from "../utils/storage.js";
-import { mapTicketFromApi } from "../utils/ticketMapper.js";
-import { useNavigate } from "react-router-dom";
+
+const labelStatus = (s) => {
+  if (s === "Open") return "Open";
+  if (s === "In Progress") return "In Progress";
+  if (s === "Resolved") return "Resolved";
+  return s;
+};
+
+// ✅ Convert backend snake_case -> frontend camelCase safely
+const mapTicket = (t) => ({
+  id: t.id,
+  userEmail: t.user_email ?? t.userEmail,
+  category: t.category,
+  title: t.title,
+  description: t.description,
+  status: t.status,
+  remark: t.remark || "",
+  createdAt: t.created_at ?? t.createdAt,
+  updatedAt: t.updated_at ?? t.updatedAt,
+});
 
 export default function TrackComplaint() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
   const session = getSession();
-  const token = getToken();
 
-  // State
-  const [ticketId, setTicketId] = useState("");
+  const [ticketId, setTicketId] = useState(searchParams.get("id") || "");
   const [ticket, setTicket] = useState(null);
-  const [comments, setComments] = useState([]);
-  const [history, setHistory] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [searched, setSearched] = useState(false);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState("details"); // details, comments, history
 
-  // Comment Form
-  const [newComment, setNewComment] = useState("");
-
+  // ✅ redirect if not logged in
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const idParam = params.get("id");
-    if (idParam) {
-      setTicketId(idParam);
-      fetchTicketData(idParam);
+    if (!session) navigate("/login");
+  }, [session, navigate]);
+
+  // ✅ auto-search if id is in URL
+  useEffect(() => {
+    const idFromUrl = searchParams.get("id");
+    if (idFromUrl) {
+      doSearch(idFromUrl);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const fetchTicketData = async (id) => {
-    if (!id) return;
-    setLoading(true);
-    setError("");
+  const doSearch = async (id) => {
+    const cleaned = (id || "").trim();
+    setTicketId(cleaned);
+    setSearched(true);
     setTicket(null);
+    setError("");
 
-    try {
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
-
-      // 1. Get Ticket
-      const res = await fetch(`${API_URL}/api/tickets/${id}`, { headers });
-
-      if (res.status === 404) throw new Error("Ticket not found");
-      if (res.status === 403) throw new Error("You are not authorized to view this ticket");
-      if (!res.ok) throw new Error("Failed to fetch ticket");
-
-      const data = await res.json();
-      setTicket(mapTicketFromApi(data));
-
-      // 2. Get Comments (if authorized, which they must be if they got the ticket)
-      if (token) {
-        const resCom = await fetch(`${API_URL}/api/tickets/${id}/comments`, { headers });
-        if (resCom.ok) setComments(await resCom.json());
-
-        const resHist = await fetch(`${API_URL}/api/tickets/${id}/history`, { headers });
-        if (resHist.ok) setHistory(await resHist.json());
-      }
-
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+    if (!cleaned) {
+      setError("Please enter a Ticket ID.");
+      return;
     }
-  };
 
-  const handleSearch = (e) => {
-    e.preventDefault();
-    fetchTicketData(ticketId);
-  };
-
-  const handleAddComment = async (e) => {
-    e.preventDefault();
-    if (!newComment.trim() || !token) return;
+    const token = getToken();
+    if (!token) {
+      clearSession();
+      navigate("/login");
+      return;
+    }
 
     try {
-      const res = await fetch(`${API_URL}/api/tickets/${ticket.id}/comments`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ content: newComment }),
+      const res = await fetch(`${API_URL}/api/tickets`, {
+        headers: { Authorization: `Bearer ${token}` },
       });
 
-      if (res.ok) {
-        setNewComment("");
-        // Reload comments
-        const resCom = await fetch(`${API_URL}/api/tickets/${ticket.id}/comments`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (resCom.ok) setComments(await resCom.json());
+      const text = await res.text();
+      let data = [];
+      try {
+        data = text ? JSON.parse(text) : [];
+      } catch {
+        data = [];
       }
+
+      if (res.status === 401) {
+        clearSession();
+        navigate("/login");
+        return;
+      }
+
+      if (!res.ok) {
+        setError(data?.message || "Failed to load tickets from server");
+        return;
+      }
+
+      const foundRaw = Array.isArray(data)
+        ? data.find((t) => String(t.id).toLowerCase() === cleaned.toLowerCase())
+        : null;
+
+      if (!foundRaw) {
+        setError("Ticket not found. Please check the ID.");
+        return;
+      }
+
+      const found = mapTicket(foundRaw);
+
+      // ✅ Only show ticket if user owns it or is admin
+      if (session?.role !== "admin" && found.userEmail !== session?.email) {
+        setError("You are not allowed to view this ticket.");
+        return;
+      }
+
+      setTicket(found);
     } catch (err) {
-      console.error(err);
+      console.error("Search error:", err);
+      setError("Backend not reachable. Is Flask running?");
     }
   };
 
+  const handleSearch = () => doSearch(ticketId);
+
   const formatDate = (dateString) => {
+    if (!dateString) return "-";
     return new Date(dateString).toLocaleString("en-US", {
-      month: "short", day: "numeric", year: "numeric",
-      hour: "2-digit", minute: "2-digit",
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
     });
   };
 
@@ -112,161 +136,118 @@ export default function TrackComplaint() {
     <div className="min-h-screen bg-gray-50">
       <Navbar />
 
-      <div className="container mx-auto px-4 py-12">
-        <div className="max-w-2xl mx-auto mb-10 text-center">
-          {session && (
-            <button
-              onClick={() => navigate("/user/dashboard")}
-              className="flex items-center gap-2 text-blue-600 hover:text-blue-700 mb-6 font-medium mx-auto"
-            >
-              <ArrowLeft className="w-5 h-5" />
-              Back to Dashboard
-            </button>
-          )}
-          <h2 className="text-3xl font-bold text-gray-900 mb-4">Track Your Complaint</h2>
-          <p className="text-gray-600 mb-8">Enter your Ticket ID to check the current status and view details.</p>
+      <div className="container mx-auto px-4 py-8">
+        <button
+          onClick={() => navigate("/user/dashboard")}
+          className="flex items-center gap-2 text-blue-600 hover:text-blue-700 mb-6 font-medium"
+        >
+          <ArrowLeft className="w-5 h-5" />
+          Back to Dashboard
+        </button>
 
-          <form onSubmit={handleSearch} className="relative max-w-lg mx-auto">
-            <input
-              type="text"
-              value={ticketId}
-              onChange={(e) => setTicketId(e.target.value)}
-              placeholder="e.g., TKT-171562..."
-              className="w-full px-6 py-4 rounded-full border border-gray-300 shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none pr-14 text-lg"
-            />
-            <button
-              type="submit"
-              disabled={loading}
-              className="absolute right-2 top-2 p-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors disabled:opacity-50"
-            >
-              {loading ? <Loader2 className="w-6 h-6 animate-spin" /> : <Search className="w-6 h-6" />}
-            </button>
-          </form>
-          {error && <p className="mt-4 text-red-500 bg-red-50 py-2 px-4 rounded-lg inline-block">{error}</p>}
-        </div>
+        <div className="max-w-3xl mx-auto">
+          <div className="bg-white rounded-xl shadow-lg p-8 mb-6">
+            <h2 className="text-2xl font-bold text-gray-900 mb-6">
+              Track Your Complaint
+            </h2>
 
-        {ticket && (
-          <div className="max-w-3xl mx-auto bg-white rounded-xl shadow-lg run-animation-fade-in overflow-hidden">
-
-            {/* Ticket Header */}
-            <div className="bg-gradient-to-r from-blue-600 to-blue-700 p-6 text-white flex justify-between items-start">
-              <div>
-                <h3 className="text-xl font-bold mb-1">Ticket Details</h3>
-                <p className="text-sm opacity-90">{ticket.id}</p>
-              </div>
-              <StatusBadge status={ticket.status} />
-            </div>
-
-            {/* Navigation Tabs */}
-            <div className="flex border-b">
+            <div className="flex gap-4">
+              <input
+                type="text"
+                value={ticketId}
+                onChange={(e) => setTicketId(e.target.value)}
+                placeholder="Enter Ticket ID (e.g., TKT-2026-1234)"
+                className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+              />
               <button
-                onClick={() => setActiveTab("details")}
-                className={`flex-1 py-4 font-semibold text-sm flex items-center justify-center gap-2 ${activeTab === 'details' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50' : 'text-gray-500 hover:bg-gray-50'}`}
+                onClick={handleSearch}
+                className="px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors flex items-center gap-2"
               >
-                <MessageSquare className="w-4 h-4" /> Discussion
+                <Search className="w-5 h-5" />
+                Search
               </button>
-              <button
-                onClick={() => setActiveTab("history")}
-                className={`flex-1 py-4 font-semibold text-sm flex items-center justify-center gap-2 ${activeTab === 'history' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50' : 'text-gray-500 hover:bg-gray-50'}`}
-              >
-                <History className="w-4 h-4" /> Timeline
-              </button>
-            </div>
-
-            <div className="p-8">
-              {/* DETAILS & COMMENTS TAB */}
-              {activeTab === "details" && (
-                <div className="space-y-8">
-                  {/* Basic Info */}
-                  <div className="space-y-4">
-                    <h2 className="text-2xl font-bold text-gray-900">{ticket.title}</h2>
-                    <div className="p-4 bg-gray-50 rounded-lg border border-gray-100 text-gray-700 leading-relaxed whitespace-pre-wrap">
-                      {ticket.description}
-                    </div>
-                    <div className="flex flex-wrap gap-4 text-sm text-gray-500">
-                      <span><span className="font-semibold">Category:</span> {ticket.category}</span>
-                      <span><span className="font-semibold">Created:</span> {formatDate(ticket.createdAt)}</span>
-                    </div>
-                    {ticket.remark && (
-                      <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4">
-                        <p className="font-bold text-yellow-800 text-sm mb-1">Admin Remark</p>
-                        <p className="text-yellow-900">{ticket.remark}</p>
-                      </div>
-                    )}
-                  </div>
-
-                  <hr />
-
-                  {/* Comments Section */}
-                  <div>
-                    <h3 className="text-lg font-bold text-gray-900 mb-4">Comments</h3>
-                    <div className="space-y-4 max-h-80 overflow-y-auto mb-4 pr-2">
-                      {comments.length === 0 && <p className="text-gray-400">No comments yet.</p>}
-                      {comments.map((c) => (
-                        <div key={c.id} className={`flex gap-3 ${c.user_email === session?.email ? 'flex-row-reverse' : ''}`}>
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${c.is_admin ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'}`}>
-                            {c.is_admin ? <ShieldAlert className="w-4 h-4" /> : <User className="w-4 h-4" />}
-                          </div>
-                          <div className={`max-w-[80%] rounded-lg p-3 ${c.user_email === session?.email ? 'bg-green-50 text-green-900' : 'bg-gray-100 text-gray-800'}`}>
-                            <div className="flex justify-between items-center gap-4 mb-1">
-                              <span className="text-xs font-bold">{c.is_admin ? 'Admin' : 'You'}</span>
-                              <span className="text-xs opacity-60">{formatDate(c.created_at)}</span>
-                            </div>
-                            <p className="text-sm whitespace-pre-wrap">{c.content}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Add Comment */}
-                    {token ? (
-                      <form onSubmit={handleAddComment} className="flex gap-2">
-                        <input
-                          type="text"
-                          value={newComment}
-                          onChange={(e) => setNewComment(e.target.value)}
-                          placeholder="Reply to this ticket..."
-                          className="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                        <button type="submit" disabled={!newComment.trim()} className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
-                          <Send className="w-5 h-5" />
-                        </button>
-                      </form>
-                    ) : (
-                      <p className="text-sm text-gray-500 text-center bg-gray-50 p-2 rounded">Log in to post comments.</p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* HISTORY TAB */}
-              {activeTab === "history" && (
-                <div className="space-y-6">
-                  <h3 className="text-lg font-bold text-gray-900 mb-4">Ticket History</h3>
-                  {history.length === 0 && <p className="text-gray-400">No history available.</p>}
-                  <div className="relative border-l-2 border-blue-100 ml-3 space-y-8 pl-8 py-2">
-                    {history.map((h, i) => (
-                      <div key={h.id} className="relative">
-                        <span className="absolute -left-[41px] top-1 h-5 w-5 rounded-full border-4 border-white bg-blue-600"></span>
-                        <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
-                          <p className="text-sm font-medium text-gray-900">
-                            Status updated to <span className="text-blue-600 font-bold">{h.new_status}</span>
-                          </p>
-                          {h.old_status && <p className="text-xs text-gray-500 mt-1">Previous: {h.old_status}</p>}
-                          <div className="flex justify-between items-center mt-2 border-t pt-2">
-                            <span className="text-xs text-gray-500">by {h.changed_by}</span>
-                            <span className="text-xs text-gray-400">{formatDate(h.change_time)}</span>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
             </div>
           </div>
-        )}
+
+          {/* ✅ Error message */}
+          {searched && !ticket && error && (
+            <div className="bg-white rounded-xl shadow-lg p-8 text-center">
+              <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg
+                  className="w-8 h-8 text-red-600"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 mb-2">Not Available</h3>
+              <p className="text-gray-600">{error}</p>
+            </div>
+          )}
+
+          {/* ✅ Ticket found */}
+          {ticket && (
+            <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+              <div className="bg-gradient-to-r from-blue-600 to-blue-700 p-6 text-white">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm opacity-90 mb-1">Ticket ID</p>
+                    <h3 className="text-2xl font-bold">{ticket.id}</h3>
+                  </div>
+                  <StatusBadge status={ticket.status} />
+                </div>
+              </div>
+
+              <div className="p-6 space-y-6">
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-500 mb-1">Category</p>
+                    <p className="text-lg text-gray-900">{ticket.category}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-500 mb-1">Status</p>
+                    <p className="text-lg text-gray-900">{labelStatus(ticket.status)}</p>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-sm font-semibold text-gray-500 mb-1">Title</p>
+                  <p className="text-lg text-gray-900">{ticket.title}</p>
+                </div>
+
+                <div>
+                  <p className="text-sm font-semibold text-gray-500 mb-1">Description</p>
+                  <p className="text-gray-700 leading-relaxed">{ticket.description}</p>
+                </div>
+
+                {ticket.remark && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <p className="text-sm font-semibold text-blue-900 mb-1">Admin Remark</p>
+                    <p className="text-blue-800">{ticket.remark}</p>
+                  </div>
+                )}
+
+                <div className="grid md:grid-cols-2 gap-6 pt-4 border-t">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-500 mb-1">Created At</p>
+                    <p className="text-gray-700">{formatDate(ticket.createdAt)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-500 mb-1">Last Updated</p>
+                    <p className="text-gray-700">{formatDate(ticket.updatedAt)}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

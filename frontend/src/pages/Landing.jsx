@@ -1,3 +1,4 @@
+import React from "react";
 import { useNavigate } from "react-router-dom";
 import { Ticket, ShieldCheck, ArrowRight, CheckCircle, Smartphone, Zap, HeartHandshake } from "lucide-react";
 import { motion } from "framer-motion";

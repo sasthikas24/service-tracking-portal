@@ -1,3 +1,4 @@
+import React from "react";
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Ticket, User, ShieldCheck } from "lucide-react";

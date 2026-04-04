@@ -1,3 +1,4 @@
+import React from "react";
 import StatusBadge from './StatusBadge.jsx';
 
 export default function TicketTable({ tickets, onTicketClick }) {
