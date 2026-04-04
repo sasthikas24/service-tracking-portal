@@ -5,15 +5,36 @@ from flask_jwt_extended import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timezone
+import os
 from db import init_db, get_db
 
 app = Flask(__name__)
 
-# ✅ CORS: allow frontend (Vite usually runs at 5173)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+# ✅ CORS: allow frontend from multiple sources
+import re
+def is_localhost(origin):
+    """Allow any localhost development server"""
+    if not origin:
+        return False
+    return bool(re.match(r"http://localhost:\d+", origin))
 
-# For development, avoid short token expiry
-app.config["JWT_SECRET_KEY"] = "change_this_secret_123"
+CORS(app, resources={r"/api/*": {"origins": [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:5175",
+    "http://localhost:5176",
+    "http://localhost:5177",
+    "http://localhost:3000",
+    "https://service-tracking-portal.vercel.app",
+    "https://*.vercel.app"
+]}})
+# Alternative: Allow all localhost (uncomment if needed)
+# def is_localhost(origin):
+#     return origin.startswith("http://localhost:") if origin else False
+# CORS(app, origins=is_localhost)
+
+# ✅ Use environment variable for secret key (with fallback for dev)
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "change_this_secret_123")
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = False
 jwt = JWTManager(app)
 
