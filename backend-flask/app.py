@@ -178,6 +178,86 @@ def create_ticket():
     finally:
         conn.close()
 
+@app.get("/api/tickets")
+@jwt_required()
+def get_tickets():
+    claims = get_jwt()
+    role = claims.get("role")
+    user_email = get_jwt_identity()
+
+    conn = get_db()
+    try:
+        if role == "admin":
+            # Admins see all tickets
+            tickets = conn.execute("SELECT * FROM tickets ORDER BY created_at DESC").fetchall()
+        else:
+            # Users see only their own tickets
+            tickets = conn.execute(
+                "SELECT * FROM tickets WHERE user_email = ? ORDER BY created_at DESC",
+                (user_email,)
+            ).fetchall()
+        
+        return jsonify([dict(t) for t in tickets]), 200
+    finally:
+        conn.close()
+
+@app.get("/api/tickets/<ticket_id>")
+@jwt_required()
+def get_ticket(ticket_id):
+    claims = get_jwt()
+    role = claims.get("role")
+    user_email = get_jwt_identity()
+
+    conn = get_db()
+    try:
+        ticket = conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
+        
+        if not ticket:
+            return jsonify({"message": "Ticket not found"}), 404
+        
+        # Users can only view their own tickets
+        if role != "admin" and ticket["user_email"] != user_email:
+            return jsonify({"message": "Unauthorized"}), 403
+        
+        return jsonify(dict(ticket)), 200
+    finally:
+        conn.close()
+
+@app.put("/api/tickets/<ticket_id>")
+@jwt_required()
+def update_ticket(ticket_id):
+    claims = get_jwt()
+    role = claims.get("role")
+    user_email = get_jwt_identity()
+
+    if role != "admin":
+        return jsonify({"message": "Only admins can update tickets"}), 403
+
+    data = request.get_json() or {}
+    status = (data.get("status") or "").strip()
+    remark = (data.get("remark") or "").strip()
+
+    if status and status not in ALLOWED_STATUS:
+        return jsonify({"message": f"Invalid status. Allowed: {', '.join(ALLOWED_STATUS)}"}), 400
+
+    conn = get_db()
+    try:
+        ticket = conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
+        
+        if not ticket:
+            return jsonify({"message": "Ticket not found"}), 404
+
+        conn.execute(
+            "UPDATE tickets SET status = ?, remark = ?, updated_at = ? WHERE id = ?",
+            (status, remark, now_iso(), ticket_id)
+        )
+        conn.commit()
+        
+        updated = conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
+        return jsonify(dict(updated)), 200
+    finally:
+        conn.close()
+
 # -------------------- RUN APP --------------------
 
 if __name__ == "__main__":
