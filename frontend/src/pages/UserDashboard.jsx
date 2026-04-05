@@ -40,6 +40,8 @@ export default function UserDashboard() {
   const loadTickets = async () => {
     setError("");
     try {
+      console.log("Loading tickets from:", `${API_URL}/api/tickets`);
+      
       const res = await fetch(`${API_URL}/api/tickets`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -53,6 +55,8 @@ export default function UserDashboard() {
         data = [];
       }
 
+      console.log("Tickets response status:", res.status, "data:", data);
+
       if (res.status === 401) {
         // token invalid/expired
         clearSession();
@@ -61,15 +65,18 @@ export default function UserDashboard() {
       }
 
       if (!res.ok) {
-        setError(data?.message || "Failed to load tickets");
+        const errorMsg = data?.message || `HTTP ${res.status}: Failed to load tickets`;
+        console.error("Error loading tickets:", errorMsg);
+        setError(errorMsg);
         return;
       }
 
       const mapped = Array.isArray(data) ? data.map(mapTicket) : [];
       mapped.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       setTickets(mapped);
-    } catch {
-      setError("Backend not reachable. Is Flask running?");
+    } catch (err) {
+      console.error("Network error loading tickets:", err);
+      setError("Backend not reachable. Check that your Render backend is deployed and running.");
     }
   };
 
