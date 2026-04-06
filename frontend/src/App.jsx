@@ -1,5 +1,5 @@
 import React from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { getSession } from "./utils/storage";
 
 import Login from "./pages/Login.jsx";
@@ -35,7 +35,7 @@ function App() {
   const session = getSession();
 
   return (
-    <BrowserRouter>
+    <HashRouter>
       <Routes>
         {/* Auth */}
         <Route
@@ -131,7 +131,7 @@ function App() {
 
         <Route path="*" element={<NotFound />} />
       </Routes>
-    </BrowserRouter>
+    </HashRouter>
   );
 }
 
